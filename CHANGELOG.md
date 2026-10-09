@@ -3,7 +3,11 @@
 All notable changes to **Document Comments**. The release workflow uses the section
 matching the pushed tag as that GitHub release's notes, so add an entry here before tagging.
 
-## Unreleased
+## 0.1.18
+
+- The margin column no longer changes the note's layout. It used to cap the text at a readable width and re-center it (shifting both of the note's margins) whenever a note had comments. It is now a pure overlay pinned to the right edge of the pane, so the text keeps exactly the width, centering, and margins Obsidian gives it in every case.
+- Added a minimize grip at the pane's top-right corner with an open-comment count. It temporarily hides the floating comment cards — text and highlights stay untouched — and restores them; starting a new comment expands the column automatically.
+- Closed margin cards are now translucent with a backdrop blur so the text underneath stays visible through them, and become fully opaque on hover, when opened, or while being edited. Sidebar cards are unchanged.
 
 ## 0.1.17
 

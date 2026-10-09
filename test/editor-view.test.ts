@@ -75,6 +75,36 @@ const open = (doc: string): string => {
 	return className;
 };
 
+/** Open with an explicit comment config and return the .cm-editor class list. */
+const openWithCfg = (doc: string, cfg: Extension): string => {
+	const parent = document.createElement("div");
+	document.body.appendChild(parent);
+	const view = new EditorView({
+		state: EditorState.create({ doc, extensions: [commentField, draftField, cfg, editorLayoutField] }),
+		parent,
+	});
+	view.requestMeasure();
+	const className = view.dom.className;
+	view.destroy();
+	return className;
+};
+
+/** Resolved comments hidden: cards for them are `display:none`. */
+const hideResolved = commentConfig.of({
+	author: () => "me",
+	showComments: () => true,
+	showResolved: () => false,
+	allowEmptyComments: () => false,
+	sidebarOpen: () => false,
+});
+
+/** Everything on .cm-editor that is not a Document Comments state class. */
+const withoutDcClasses = (s: string): string =>
+	s
+		.replace(/dc-[a-z-]+/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+
 describe("editor extensions open every note without crashing", () => {
 	test("plain note with no comments", () => {
 		expect(() => open("Just plain text.\nNo comments here.\n")).not.toThrow();
@@ -325,7 +355,6 @@ describe("editor extensions open every note without crashing", () => {
 	test("editorLayoutField puts layout classes on .cm-editor", () => {
 		const plain = open("Just plain text.\nNo comments here.\n");
 		expect(plain).toContain("dc-highlights"); // Show highlights is on
-		expect(plain).not.toContain("dc-has"); // no comments → no reserved column
 
 		const withComment = open(
 			[
@@ -336,14 +365,34 @@ describe("editor extensions open every note without crashing", () => {
 				"",
 			].join("\n"),
 		);
-		expect(withComment).toContain("dc-has"); // a comment reserves the column
 		expect(withComment).toContain("dc-highlights");
+		// The margin is a pure overlay now: comments must not add or change any
+		// .cm-editor class, because nothing about the text layout is reserved.
+		expect(withoutDcClasses(withComment)).toBe(withoutDcClasses(plain));
+	});
 
-		const orphanOnly = open(
-			'Text without an anchor.\n<!--co:orphan status:open quote:"old text"\nme: dangling\n-->',
-		);
-		expect(orphanOnly).not.toContain("dc-has");
-		expect(orphanOnly).toContain("dc-highlights");
+	// Regression: the overlay must be non-invasive — .cm-editor's class list is
+	// identical with or without comments, and never carries a layout class.
+	test("comment presence never reserves layout on .cm-editor", () => {
+		const base = open("Just plain text.\nNo comments here.\n");
+		expect(base).toContain("dc-highlights");
+		expect(base).not.toContain("dc-has");
+		const openDoc = [
+			"Ship on <!--c:aaa-->Friday<!--/c:aaa--> regardless.",
+			'<!--co:aaa by:me at:2026-06-17T00:00:00.000Z status:open quote:"Friday"',
+			"me: sounds good",
+			"-->",
+			"",
+		].join("\n");
+		expect(withoutDcClasses(open(openDoc))).toBe(withoutDcClasses(base));
+		const resolvedOnly = [
+			"Ship on <!--c:bbb-->Friday<!--/c:bbb--> regardless.",
+			'<!--co:bbb by:me at:2026-06-17T00:00:00.000Z status:resolved quote:"Friday"',
+			"me: done",
+			"-->",
+			"",
+		].join("\n");
+		expect(withoutDcClasses(open(resolvedOnly))).toBe(withoutDcClasses(base));
 	});
 
 	test("keeps existing empty comments visible when new empty comments are disabled", () => {
@@ -355,32 +404,14 @@ describe("editor extensions open every note without crashing", () => {
 				"",
 			].join("\n"),
 		);
-		expect(withHighlight).toContain("dc-has"); // an empty comment keeps its margin card
 		expect(withHighlight).toContain("dc-highlights");
 	});
 
-	// Regression for issue #30: once every comment is resolved and resolved
-	// comments are hidden, no card renders — so the column must not stay reserved.
-	test("all comments resolved + resolved hidden does not reserve the column", () => {
-		const hideResolved = commentConfig.of({
-			author: () => "me",
-			showComments: () => true,
-			showResolved: () => false,
-			allowEmptyComments: () => false,
-			sidebarOpen: () => false,
-		});
-		const openWith = (doc: string, cfg: typeof hideResolved): string => {
-			const parent = document.createElement("div");
-			document.body.appendChild(parent);
-			const view = new EditorView({
-				state: EditorState.create({ doc, extensions: [commentField, draftField, cfg, editorLayoutField] }),
-				parent,
-			});
-			view.requestMeasure();
-			const className = view.dom.className;
-			view.destroy();
-			return className;
-		};
+	// Regression for issue #30: resolved comments are hidden via `dc-hide-resolved`
+	// on .cm-editor; with the overlay layout this is purely a card-visibility rule
+	// and must not affect the text column's classes. The overlay never reserves
+	// layout, so .cm-editor's class list is unchanged whether or not cards render.
+	test("all comments resolved + resolved hidden leaves .cm-editor classes unchanged", () => {
 		const resolvedDoc = [
 			"Ship on <!--c:aaa-->Friday<!--/c:aaa--> regardless.",
 			'<!--co:aaa by:me at:2026-06-17T00:00:00.000Z status:resolved quote:"Friday"',
@@ -388,31 +419,18 @@ describe("editor extensions open every note without crashing", () => {
 			"-->",
 			"",
 		].join("\n");
-		// Sanity: with resolved shown, the (visible) resolved card still reserves the column.
-		expect(openWith(resolvedDoc, config)).toContain("dc-has");
-		// With resolved hidden, the card is display:none, so no column is reserved.
-		expect(openWith(resolvedDoc, hideResolved)).not.toContain("dc-has");
-
-		// Mixed: one open + one resolved comment, resolved hidden. The open card
-		// still renders, so the column MUST stay reserved — guards the predicate
-		// against being written as `.every(...)` instead of `.some(...)`.
-		const mixedDoc = [
-			"Ship on <!--c:aaa-->Friday<!--/c:aaa--> and <!--c:bbb-->Monday<!--/c:bbb--> too.",
-			'<!--co:aaa by:me at:2026-06-17T00:00:00.000Z status:resolved quote:"Friday"',
-			"me: done",
-			"-->",
-			'<!--co:bbb by:me at:2026-06-17T00:00:01.000Z status:open quote:"Monday"',
-			"me: still open",
-			"-->",
-			"",
-		].join("\n");
-		expect(openWith(mixedDoc, hideResolved)).toContain("dc-has");
+		// The only difference between these two opens is showResolved, which must
+		// toggle dc-hide-resolved but never anything that moves the text.
+		const shown = openWithCfg(resolvedDoc, config);
+		const hidden = openWithCfg(resolvedDoc, hideResolved);
+		expect(shown).toContain("dc-highlights");
+		expect(shown).not.toContain("dc-hide-resolved");
+		expect(hidden).toContain("dc-hide-resolved");
+		expect(withoutDcClasses(hidden)).toBe(withoutDcClasses(shown));
 	});
 
-	// Regression for issue #15: opening the transient "new comment" composer must
-	// NOT reserve the column. It used to toggle `dc-has`, which caps the sizer
-	// width and reflows/re-centers the whole document every time you start (and
-	// finish) a comment. The floating composer overlays the gutter instead.
+	// The composer is a floating overlay: opening a draft must never touch the
+	// text layout, so .cm-editor must not gain any layout-only class for it.
 	test("an open draft does not reserve the column (no reflow)", () => {
 		const parent = document.createElement("div");
 		document.body.appendChild(parent);
@@ -430,7 +448,7 @@ describe("editor extensions open every note without crashing", () => {
 		const draft = view.state.field(draftField);
 		view.destroy();
 		expect(draft).toMatchObject({ from: 1, to: 5, targetHighlightId: "h1" });
-		expect(className).not.toContain("dc-has"); // draft is a floating overlay, no column reserved
+		expect(className).not.toContain("dc-has"); // no layout class is ever added
 		expect(className).toContain("dc-highlights"); // highlights follow Show highlights
 	});
 

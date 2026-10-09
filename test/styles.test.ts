@@ -83,30 +83,72 @@ describe("entry action bar on touch screens", () => {
 	});
 });
 
-describe("narrow panes", () => {
-	// Giving the column its full width at any pane width squeezed the text to a
-	// sliver on a narrow pane, which pushed every anchor, and its card, out of view (#83).
-	const textWidth =
-		/max-width: min\(\s*var\(--file-line-width, 50rem\),\s*max\(var\(--dc-min-text-width\), calc\(100% - var\(--dc-margin-width\)\)\)\s*\)/;
-
-	test("keeps the Live Preview text at its minimum width beside the column", () => {
-		const rule =
-			/\.markdown-source-view\.mod-cm6 \.cm-editor\.dc-has \.cm-sizer\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
-
-		expect(rule).toMatch(textWidth);
+describe("non-invasive overlay layout", () => {
+	// The margin must never change the text's width, margins, or centering. It is
+	// a pure overlay pinned to the pane's right edge.
+	test("keeps the Live Preview text completely untouched (no sizer cap)", () => {
+		expect(styles).not.toMatch(/dc-has/);
+		expect(styles).not.toMatch(/\.cm-sizer/);
+		expect(styles).not.toMatch(/--dc-min-text-width/);
 	});
 
-	test("keeps the Reading view text at its minimum width beside the column", () => {
+	test("keeps the Reading view text completely untouched (no sizer cap)", () => {
+		expect(styles).not.toMatch(/\.markdown-preview-sizer/);
+	});
+
+	test("pins the margin overlay to the right edge of the pane", () => {
+		const rule = /\.doc-comment-margin\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
+
+		expect(rule).toContain("position: absolute");
+		expect(rule).toMatch(/right:\s*0/);
+		expect(rule).toContain("width: var(--dc-margin-width)");
+		expect(rule).not.toMatch(/left:\s*calc/);
+	});
+
+	test("defines the column width variable", () => {
+		expect(styles).toMatch(/--dc-margin-width: \d+px;/);
+	});
+
+	test("collapsed column hides every card except a live draft composer", () => {
 		const rule =
-			/\.markdown-reading-view\.dc-has \.markdown-preview-view \.markdown-preview-sizer\s*\{([^}]*)\}/.exec(
+			/\.doc-comment-margin\.dc-collapsed \.doc-comment-card:not\(\.is-draft\)\s*\{([^}]*)\}/.exec(styles)?.[1] ??
+			"";
+
+		expect(rule).toContain("display: none");
+	});
+});
+
+describe("minimize grip", () => {
+	test("is pinned to the pane's top-right corner", () => {
+		const rule = /\.dc-margin-tab\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
+
+		expect(rule).toContain("position: absolute");
+		expect(rule).toContain("top: 8px");
+		expect(rule).toContain("right: 8px");
+		expect(rule).toContain("pointer-events: auto");
+	});
+});
+
+describe("translucent overlay cards", () => {
+	test("closed margin cards are translucent with a backdrop blur", () => {
+		const rule = /\.doc-comment-margin \.doc-comment-card\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
+
+		expect(rule).toContain("backdrop-filter: blur");
+		expect(rule).toContain("color-mix(in srgb, var(--background-primary) 90%, transparent)");
+	});
+
+	test("interaction states make an overlay card fully opaque", () => {
+		const rule =
+			/\.doc-comment-margin \.doc-comment-card:hover,\s*\.doc-comment-margin \.doc-comment-card\.is-active,\s*\.doc-comment-margin \.doc-comment-card\.is-open,\s*\.doc-comment-margin \.doc-comment-card\.is-editing,\s*\.doc-comment-margin \.doc-comment-card\.is-draft\s*\{([^}]*)\}/.exec(
 				styles,
 			)?.[1] ?? "";
 
-		expect(rule).toMatch(textWidth);
+		expect(rule).toContain("background-color: var(--background-primary)");
 	});
 
-	test("defines the minimum text width", () => {
-		expect(styles).toMatch(/--dc-min-text-width: \d+rem;/);
+	test("sidebar cards stay solid (they never overlay text)", () => {
+		// The translucency rules are scoped to .doc-comment-margin only.
+		expect(styles).not.toMatch(/\.dc-sidebar \.doc-comment-card\s*\{[^}]*backdrop-filter/);
 	});
 });
 

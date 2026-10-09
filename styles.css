@@ -4,9 +4,6 @@
 /* On body so the variables reach both the editor and the reading view. */
 body {
 	--dc-margin-width: 320px;
-	/* The narrowest the text gets to make room for the column. On a pane too narrow
-	   for both, the column overlaps the text instead of squeezing it to a sliver (#83). */
-	--dc-min-text-width: 15rem;
 	--dc-card-pad: 16px;
 	--dc-card-gap: 8px;
 	--dc-highlight-color: var(--text-normal);
@@ -20,49 +17,25 @@ body {
 	padding-block: 10px;
 }
 
-/* Layout is keyed on a `dc-has` class set on the editor / reading-view container.
-   In the editor that class rides on `.cm-editor` via CodeMirror's editorAttributes
-   facet (CM owns that element's className and would strip a raw classList.add); in
-   reading view it's written straight onto `.markdown-reading-view`. Keeping the
-   state on the container — rather than our own child element — lets the body cap
-   and column position use plain descendant selectors, with no parent-from-child
-   matching. The min()/calc clamps keep body and column adjacent (no JS width gate). */
-.cm-editor.dc-has {
+/* The margin is a pure overlay pinned to the RIGHT edge of the pane. It never
+   reserves layout: the text column keeps exactly the width, centering, and margins
+   Obsidian gives it (the user's readable-line-width setting), whether or not any
+   comment exists. Cards float over the pane's right side; on a full-width note
+   they can overlap text, which is why closed cards are translucent (see below) and
+   the column can be temporarily collapsed via the minimize grip (.dc-margin-tab).
+
+   The editor's containing block: CodeMirror already forces `.cm-editor` to
+   position: relative, but we assert it here anyway so the absolutely positioned
+   container can never escape to a wrong ancestor if a theme changes that. */
+.markdown-source-view.mod-cm6 .cm-editor {
 	position: relative;
 }
 
-/* Cap the body at its readable width and center the [text + column] block as a
-   unit: an equal computed margin on the far left and to the right of the column.
-   Scoped under `.markdown-source-view.mod-cm6` so it out-specifies Obsidian's own
-   readable-line-width rule (.markdown-source-view.mod-cm6.is-readable-line-width
-   .cm-sizer, four classes) — five classes here win on specificity alone. */
-.markdown-source-view.mod-cm6 .cm-editor.dc-has .cm-sizer {
-	max-width: min(
-		var(--file-line-width, 50rem),
-		max(var(--dc-min-text-width), calc(100% - var(--dc-margin-width)))
-	);
-	margin-left: max(0px, calc((100% - var(--file-line-width, 50rem) - var(--dc-margin-width)) / 2));
-	margin-right: auto;
-}
-
-/* Same treatment for the reading view (separate render path, same math). The extra
-   `.markdown-preview-view` step out-specifies core's three-class readable-line rule
-   (.markdown-preview-view.is-readable-line-width .markdown-preview-sizer). */
-/* `dc-margin` (present whenever the floating column renders, including a lone draft
-   composer) establishes the containing block for the absolutely positioned margin.
-   Kept separate from `dc-has` (the sizer cap) so opening a draft doesn't reflow the
-   text — see issue #15. The editor doesn't need this: CodeMirror already forces
-   `.cm-editor` to position: relative. */
+/* The reading view does not force position on its container, so `dc-margin`
+   (present whenever the floating column renders, including a lone draft composer)
+   establishes the containing block for the absolutely positioned margin. */
 .markdown-reading-view.dc-margin {
 	position: relative;
-}
-.markdown-reading-view.dc-has .markdown-preview-view .markdown-preview-sizer {
-	max-width: min(
-		var(--file-line-width, 50rem),
-		max(var(--dc-min-text-width), calc(100% - var(--dc-margin-width)))
-	);
-	margin-left: max(0px, calc((100% - var(--file-line-width, 50rem) - var(--dc-margin-width)) / 2));
-	margin-right: auto;
 }
 
 /* The highlighted span in the text. */
@@ -78,10 +51,10 @@ body {
 }
 /* When highlights are toggled off, drop them entirely so the prose reads clean.
    Keyed on `dc-highlights` (which follows the Show highlights setting), NOT on
-   `dc-has` (the inline column) — so highlights persist when the sidebar panel
-   hosts the cards and the inline column has stepped aside, and when the cards
-   are hidden outright. `.dc-draft` is exempt: it marks the text an open composer
-   is about to anchor to, and losing it leaves you writing against nothing. */
+   the margin overlay — so highlights persist when the sidebar panel hosts the
+   cards and the inline column has stepped aside, and when the cards are hidden
+   outright. `.dc-draft` is exempt: it marks the text an open composer is about
+   to anchor to, and losing it leaves you writing against nothing. */
 .cm-editor:not(.dc-highlights) .doc-comment-span:not(.dc-draft),
 .markdown-reading-view:not(.dc-highlights) .doc-comment-span:not(.dc-draft) {
 	background-color: transparent;
@@ -134,7 +107,8 @@ body {
 	25% { box-shadow: 0 0 0 2px var(--interactive-accent); }
 }
 
-/* The floating margin column. Overlay inside the editor; clipped to viewport. */
+/* The floating margin column: an overlay pinned to the pane's right edge, clipped
+   to the viewport. It never reserves or reflows the text column. */
 .doc-comment-margin {
 	position: absolute;
 	top: 0;
@@ -145,18 +119,48 @@ body {
 	pointer-events: none;
 	z-index: var(--layer-popover, 30);
 }
-/* Pin the column right after the readable-width text (CSS-only, so it never
-   jumps on focus). Clamped so it can't push off the right edge on narrow panes.
-   Keyed on the container's dc-has (set on .cm-editor / .markdown-reading-view). */
-.cm-editor.dc-has .doc-comment-margin,
-.markdown-reading-view.dc-has .doc-comment-margin {
-	/* Mirror of the sizer's centering math: column begins right where the
-	   centered text ends. Clamped so it never runs off the right edge. */
-	left: min(
-		calc((100% + var(--file-line-width, 50rem) - var(--dc-margin-width)) / 2),
-		calc(100% - var(--dc-margin-width))
-	);
-	right: auto;
+
+/* Temporarily hidden (the minimize grip): keep the draft composer visible so you
+   never lose an in-progress comment, hide everything else. */
+.doc-comment-margin.dc-collapsed .doc-comment-card:not(.is-draft) {
+	display: none;
+}
+
+/* Minimize/expand grip pinned to the pane's top-right corner. Always available
+   while the column has visible cards; collapses the overlay so it stops covering
+   text, and expands it back. */
+.dc-margin-tab {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	z-index: 4;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 14px;
+	background-color: color-mix(in srgb, var(--background-primary) 85%, transparent);
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1;
+	cursor: pointer;
+	pointer-events: auto;
+	transition: background-color 120ms ease, color 120ms ease;
+}
+.dc-margin-tab:hover {
+	background-color: var(--background-primary);
+	color: var(--text-normal);
+}
+.dc-margin-tab .svg-icon {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+}
+.dc-margin-tab__count {
+	font-variant-numeric: tabular-nums;
 }
 
 /* ── Card ──────────────────────────────────────────────────────────────── */
@@ -178,6 +182,24 @@ body {
 	   makes them lag/swim behind the scroll (and restacks snap instantly, which is
 	   fine). Keep transitions for hover transform + shadow only. */
 	transition: transform 120ms ease, box-shadow 120ms ease;
+}
+/* In the floating margin the column can overlay the text: keep closed cards
+   translucent with a backdrop blur so the prose underneath stays readable
+   through them. Interaction states turn the card fully opaque. (Sidebar cards
+   live in a normal panel over no content, so they stay solid — this rule is
+   scoped to the margin overlay only.) */
+.doc-comment-margin .doc-comment-card {
+	background-color: color-mix(in srgb, var(--background-primary) 90%, transparent);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+.doc-comment-margin .doc-comment-card:hover,
+.doc-comment-margin .doc-comment-card.is-active,
+.doc-comment-margin .doc-comment-card.is-open,
+.doc-comment-margin .doc-comment-card.is-editing,
+.doc-comment-margin .doc-comment-card.is-draft {
+	background-color: var(--background-primary);
 }
 .doc-comment-card:hover,
 .doc-comment-card.is-active,

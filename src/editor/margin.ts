@@ -1,4 +1,4 @@
-import { Notice, editorInfoField } from "obsidian";
+import { Notice, editorInfoField, setIcon } from "obsidian";
 import { Result } from "better-result";
 import type { Text } from "@codemirror/state";
 import { EditorView, PluginValue, ViewPlugin } from "@codemirror/view";
@@ -24,7 +24,7 @@ import {
 } from "./commands";
 import { closestSpanId, spanSelector } from "../util/css";
 import { stackTops } from "../ui/stack";
-import { CARD_GAP, FLASH_MS } from "../ui/constants";
+import { CARD_GAP, FLASH_MS, MARGIN_TAB_GUARD } from "../ui/constants";
 import { buildDraftComposer } from "../ui/draft-composer";
 import { EmptySubmitAction } from "../ui/draft-behavior";
 
@@ -46,6 +46,10 @@ class MarginView implements PluginValue {
 	private cards = new Map<string, Card>();
 	private activeId: string | null = null;
 	private draftEl: HTMLElement | null = null;
+	/** Minimize grip pinned to the pane's top-right corner; present only while the
+	 *  column has visible cards. Toggling it hides the overlay (`dc-collapsed`). */
+	private tabEl: HTMLElement | null = null;
+	private tabCountEl: HTMLElement | null = null;
 	private setDraftEmptyAction: ((action: EmptySubmitAction) => void) | null = null;
 	private draftFocused = false;
 	private draftOutside: ((e: MouseEvent) => void) | null = null;
@@ -153,6 +157,8 @@ class MarginView implements PluginValue {
 		this.removeDraftOutside();
 		for (const card of this.cards.values()) card.destroy();
 		this.cards.clear();
+		this.tabEl = null;
+		this.tabCountEl = null;
 		this.container.remove();
 	}
 
@@ -167,6 +173,62 @@ class MarginView implements PluginValue {
 		// Resolved cards stay in the DOM and are hidden via a container class, so
 		// toggling visibility never requires rebuilding the editor.
 		return fv.comments.filter(hasMarginAnchor);
+	}
+
+	/** Cards that are actually visible (resolved cards are hidden by
+	 *  `dc-hide-resolved` while resolved comments are set to be hidden). */
+	private visibleCards(): number {
+		const cfg = this.view.state.facet(commentConfig);
+		return this.comments().filter((c) => cfg.showResolved() || c.status !== "resolved").length;
+	}
+
+	private isCollapsed(): boolean {
+		return this.container.classList.contains("dc-collapsed");
+	}
+
+	private expand(): void {
+		if (!this.isCollapsed()) return;
+		this.container.classList.remove("dc-collapsed");
+		this.updateTabAffordance();
+		this.requestReposition();
+	}
+
+	private toggleCollapsed(): void {
+		this.container.classList.toggle("dc-collapsed", !this.isCollapsed());
+		this.updateTabAffordance();
+		this.requestReposition();
+	}
+
+	private updateTabAffordance(): void {
+		if (!this.tabEl) return;
+		const collapsed = this.isCollapsed();
+		const icon = this.tabEl.querySelector<HTMLElement>(".dc-margin-tab__icon");
+		if (icon) setIcon(icon, collapsed ? "chevrons-left" : "chevrons-right");
+		this.tabEl.setAttribute("aria-label", collapsed ? "Show comments" : "Minimize comments");
+		this.tabEl.setAttribute("aria-pressed", String(collapsed));
+	}
+
+	/** Keep the minimize grip in sync with the visible cards: create it with the
+	 *  first card, remove it with the last, and refresh the count. */
+	private syncTab(): void {
+		const count = this.visibleCards();
+		if (count > 0 && !this.tabEl) {
+			const tab = this.container.createEl("button", {
+				cls: "dc-margin-tab",
+				attr: { "aria-label": "Minimize comments", "aria-pressed": "false" },
+			});
+			const icon = tab.createSpan({ cls: "dc-margin-tab__icon" });
+			setIcon(icon, "chevrons-right");
+			this.tabCountEl = tab.createSpan({ cls: "dc-margin-tab__count" });
+			tab.addEventListener("click", () => this.toggleCollapsed());
+			this.tabEl = tab;
+		} else if (count === 0 && this.tabEl) {
+			this.tabEl.remove();
+			this.tabEl = null;
+			this.tabCountEl = null;
+			this.container.classList.remove("dc-collapsed");
+		}
+		if (this.tabCountEl) this.tabCountEl.textContent = String(count);
 	}
 
 	private reconcile(): void {
@@ -197,6 +259,7 @@ class MarginView implements PluginValue {
 				existing.setAnchorDamage(damage.get(c.id) ?? null);
 			}
 		}
+		this.syncTab();
 	}
 
 	private anchorDamage(): Map<string, AnchorDamage> {
@@ -221,10 +284,9 @@ class MarginView implements PluginValue {
 
 	private reposition(): void {
 		if (this.destroyed) return;
-		// dc-has / dc-highlights / dc-hide-resolved now live on the .cm-editor element
-		// (editorLayoutField → editorAttributes), so the stylesheet caps the text
-		// column with plain descendant selectors — no :has(), nothing to toggle on our
-		// own container here.
+		// The overlay never reserves layout: no sizer cap, no re-centering, nothing
+		// to reconcile against Obsidian's own text layout. Highlights/hide-resolved
+		// ride on .cm-editor via editorLayoutField → editorAttributes.
 		const draft = this.view.state.field(draftField, false) ?? null;
 		this.syncDraftEl(draft);
 
@@ -238,6 +300,9 @@ class MarginView implements PluginValue {
 		// table anchor that way piles every card in the table onto its top edge
 		// (issue #79). Where the anchor resolves to a rendered cell, measure the
 		// cell; everywhere else coordsAtPos is still the right answer.
+		// `guardTop` keeps a card that anchors near the very top out from under the
+		// minimize grip; cards below the grip keep exact anchor alignment.
+		const guardTop = this.tabEl !== null;
 		const place = (el: HTMLElement, pos: number, cell: HTMLElement | undefined) => {
 			const rect = cell?.getBoundingClientRect() ?? this.view.coordsAtPos(pos);
 			if (!rect) {
@@ -246,7 +311,11 @@ class MarginView implements PluginValue {
 			}
 			el.removeClass("dc-offscreen");
 			if (el.offsetHeight === 0) return; // hidden (e.g. resolved)
-			placements.push({ el, top: rect.top - editorTop, height: el.offsetHeight });
+			placements.push({
+				el,
+				top: rect.top - editorTop + (guardTop ? Math.max(0, MARGIN_TAB_GUARD - (rect.top - editorTop)) : 0),
+				height: el.offsetHeight,
+			});
 		};
 
 		const doc = this.view.state.doc.toString();
@@ -281,6 +350,9 @@ class MarginView implements PluginValue {
 		if (draft && !this.draftEl) {
 			this.draftEl = this.buildDraftEl();
 			this.container.appendChild(this.draftEl);
+			// A freshly opened composer must never be stranded inside a collapsed
+			// column, so auto-expand when one starts.
+			this.expand();
 			this.draftFocused = false;
 			// Click away from an empty draft dismisses it (Notion behavior).
 			this.draftOutside = (e: MouseEvent) => {

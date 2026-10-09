@@ -1,4 +1,4 @@
-import { App, MarkdownView, Notice } from "obsidian";
+import { App, MarkdownView, Notice, setIcon } from "obsidian";
 import { Result } from "better-result";
 import { ParsedComment, TextRange } from "../format/types";
 import { hasMarginAnchor, parseComments } from "../format/parse";
@@ -19,7 +19,7 @@ import { syncHighlights } from "./highlight";
 import { highlightsShown } from "../editor/config";
 import { closestSpanId, spanSelector } from "../util/css";
 import { stackTops } from "../ui/stack";
-import { CARD_GAP, FLASH_MS } from "../ui/constants";
+import { CARD_GAP, FLASH_MS, MARGIN_TAB_GUARD } from "../ui/constants";
 import { buildDraftComposer } from "../ui/draft-composer";
 import { EmptySubmitAction } from "../ui/draft-behavior";
 import { authorColorCss, type AuthorColorResolver } from "../author-colors";
@@ -50,6 +50,10 @@ class ReadingMargin {
 	private comments: ParsedComment[] = [];
 	private damage = new Map<string, AnchorDamage>();
 	private activeId: string | null = null;
+	/** Minimize grip pinned to the pane's top-right corner; present only while the
+	 *  column has visible cards. Toggling it hides the overlay (`dc-collapsed`). */
+	private tabEl: HTMLElement | null = null;
+	private tabCountEl: HTMLElement | null = null;
 	private draft: TextRange | null = null;
 	private draftText = "";
 	private draftEmptyAction: EmptySubmitAction = "none";
@@ -171,6 +175,60 @@ class ReadingMargin {
 			}
 		}
 		this.readingView.toggleClass("dc-hide-resolved", !this.deps.showResolved());
+		this.syncTab();
+	}
+
+	private visibleCards(): number {
+		return this.comments.filter((c) => this.deps.showResolved() || c.status !== "resolved").length;
+	}
+
+	private isCollapsed(): boolean {
+		return this.container.classList.contains("dc-collapsed");
+	}
+
+	private expand(): void {
+		if (!this.isCollapsed()) return;
+		this.container.classList.remove("dc-collapsed");
+		this.updateTabAffordance();
+		this.position();
+	}
+
+	private toggleCollapsed(): void {
+		this.container.classList.toggle("dc-collapsed", !this.isCollapsed());
+		this.updateTabAffordance();
+		this.position();
+	}
+
+	private updateTabAffordance(): void {
+		if (!this.tabEl) return;
+		const collapsed = this.isCollapsed();
+		const icon = this.tabEl.querySelector<HTMLElement>(".dc-margin-tab__icon");
+		if (icon) setIcon(icon, collapsed ? "chevrons-left" : "chevrons-right");
+		this.tabEl.setAttribute("aria-label", collapsed ? "Show comments" : "Minimize comments");
+		this.tabEl.setAttribute("aria-pressed", String(collapsed));
+	}
+
+	/** Keep the minimize grip in sync with the visible cards: create it with the
+	 *  first card, remove it with the last, and refresh the count. */
+	private syncTab(): void {
+		const count = this.visibleCards();
+		if (count > 0 && !this.tabEl) {
+			const tab = this.container.createEl("button", {
+				cls: "dc-margin-tab",
+				attr: { "aria-label": "Minimize comments", "aria-pressed": "false" },
+			});
+			const icon = tab.createSpan({ cls: "dc-margin-tab__icon" });
+			setIcon(icon, "chevrons-right");
+			this.tabCountEl = tab.createSpan({ cls: "dc-margin-tab__count" });
+			tab.addEventListener("click", () => this.toggleCollapsed());
+			this.tabEl = tab;
+		} else if (count === 0 && this.tabEl) {
+			this.tabEl.remove();
+			this.tabEl = null;
+			this.tabCountEl = null;
+			this.container.classList.remove("dc-collapsed");
+		}
+		if (this.tabCountEl) this.tabCountEl.textContent = String(count);
 	}
 
 	private position(): void {
@@ -178,32 +236,23 @@ class ReadingMargin {
 		const draftColor = authorColorCss(this.deps.highlightColorForAuthor(this.deps.getAuthor()));
 		this.readingView.style.setProperty("--dc-highlight-color", draftColor);
 		this.readingView.style.setProperty("--dc-draft-highlight-color", draftColor);
-		// State classes live on the reading-view container (Obsidian-owned, safe to
-		// write directly), so the stylesheet caps the text column with plain
-		// descendant selectors instead of :has().
-		//
-		// `dc-has` reserves the column (caps the sizer) and is tied ONLY to persistent
-		// cards — never the transient draft composer. Reserving it for a draft reflowed
-		// (and re-centered) the whole preview every time you opened/closed the composer
-		// (issue #15). `dc-margin` is the lighter "the floating column is present"
-		// signal: it just makes the container `position: relative` so the absolutely
-		// positioned composer has a containing block (unlike the editor, CodeMirror
-		// doesn't force position on the reading-view element). The composer then floats
-		// over the right gutter without shifting the text.
-		// Only a comment whose card actually renders reserves the column. A resolved
-		// comment's card is `display:none` while resolved are hidden (dc-hide-resolved),
-		// so counting it kept the empty column around once every comment was resolved
-		// (issue #30) — mirror that visibility, exactly as the editor layout does.
-		const hasCards = this.comments.some((c) => this.deps.showResolved() || c.status !== "resolved");
-		this.readingView.toggleClass("dc-has", hasCards);
-		this.readingView.toggleClass("dc-margin", hasCards || !!this.draft);
-		// Highlights have their own toggle, so they persist both while the sidebar
-		// panel hosts the cards (dc-has is off) and while the column is hidden.
+		// The margin is a pure overlay pinned to the right edge, so the reading
+		// text always keeps Obsidian's native width/centering — no sizer cap, no
+		// re-centering. `dc-margin` only makes the reading-view element
+		// `position: relative` so the absolutely positioned overlay (cards or a
+		// lone draft composer) has a containing block; unlike the editor, Obsidian
+		// doesn't force position on the reading-view element. `dc-highlights` keeps
+		// the in-text underlines visible independently of the column.
+		const visibleCount = this.comments.filter((c) => this.deps.showResolved() || c.status !== "resolved").length;
+		this.readingView.toggleClass("dc-margin", visibleCount > 0 || !!this.draft);
 		this.readingView.toggleClass("dc-highlights", highlightsShown(this.deps));
 		const topRef = this.readingView.getBoundingClientRect().top;
 		// Gather geometry (reads) first, then write every top in one pass — cards are
 		// absolutely positioned, so a top write can't change any height.
 		const placements: Array<{ el: HTMLElement; top: number; height: number }> = [];
+		// `guardTop` keeps a card that anchors near the very top out from under the
+		// minimize grip; cards below the grip keep exact anchor alignment.
+		const guardTop = this.tabEl !== null;
 		for (const c of this.comments) {
 			const card = this.cards.get(c.id);
 			if (!card) continue;
@@ -214,16 +263,18 @@ class ReadingMargin {
 			}
 			card.el.removeClass("dc-offscreen");
 			if (card.el.offsetHeight === 0) continue;
+			const top = span.getBoundingClientRect().top - topRef;
 			placements.push({
 				el: card.el,
-				top: span.getBoundingClientRect().top - topRef,
+				top: top + (guardTop ? Math.max(0, MARGIN_TAB_GUARD - top) : 0),
 				height: card.el.offsetHeight,
 			});
 		}
 		if (this.draftEl && this.draftAnchor) {
+			const top = this.draftAnchor.getBoundingClientRect().top - topRef;
 			placements.push({
 				el: this.draftEl,
-				top: this.draftAnchor.getBoundingClientRect().top - topRef,
+				top: top + (guardTop ? Math.max(0, MARGIN_TAB_GUARD - top) : 0),
 				height: this.draftEl.offsetHeight,
 			});
 		}
@@ -257,6 +308,9 @@ class ReadingMargin {
 		this.draftTargetHighlightId = targetHighlightId;
 		this.draftEl = this.buildDraftEl();
 		this.container.appendChild(this.draftEl);
+		// A freshly opened composer must never be stranded inside a collapsed
+		// column, so auto-expand when one starts.
+		this.expand();
 		this.position();
 		window.setTimeout(() => {
 			const ta = this.draftEl?.querySelector("textarea");
@@ -329,9 +383,9 @@ class ReadingMargin {
 		this.draftText = "";
 		this.draftEmptyAction = "none";
 		this.draftTargetHighlightId = undefined;
-		// Re-run layout so the composer's `dc-margin` (and its reserved slot in the
-		// stack) is dropped immediately on cancel — the editor margin gets this for
-		// free via its dispatch cycle; the reading margin has to ask for it.
+		// Re-run layout so the composer's `dc-margin` containing block is dropped
+		// immediately on cancel — the editor margin gets this for free via its
+		// dispatch cycle; the reading margin has to ask for it.
 		this.position();
 	}
 
@@ -422,9 +476,12 @@ class ReadingMargin {
 		this.readingView.removeEventListener("mouseout", this.onMouseOut);
 		this.readingView.removeEventListener("mousedown", this.onMouseDown);
 		// The container we own goes away; the state classes sit on Obsidian's
-		// reading-view element, so clear them explicitly to avoid leaving it capped.
-		this.readingView.removeClasses(["dc-has", "dc-margin", "dc-highlights", "dc-hide-resolved"]);
+		// reading-view element, so clear them explicitly rather than leaving them
+		// (e.g. a stale `position: relative` from `dc-margin`).
+		this.readingView.removeClasses(["dc-margin", "dc-highlights", "dc-hide-resolved"]);
 		for (const card of this.cards.values()) card.destroy();
+		this.tabEl = null;
+		this.tabCountEl = null;
 		this.container.remove();
 		this.cards.clear();
 	}
@@ -451,12 +508,12 @@ export class ReadingMarginManager {
 			const shown = view.getViewData();
 			if (shown) syncHighlights(rv, shown);
 			if (mobile) {
-				// Mobile: no floating cards or reserved column. Just keep the in-text
-				// highlights' visibility in sync with the toggles (no `dc-has`, so the
-				// text keeps full width). Comments are read/created via the sidebar.
+				// Mobile: no floating overlay and no position containing block. Just
+				// keep the in-text highlights' visibility in sync with the toggles.
+				// Comments are read/created via the sidebar.
 				rv.toggleClass("dc-highlights", highlightsShown(this.deps));
 				rv.toggleClass("dc-hide-resolved", !this.deps.showResolved());
-				rv.removeClasses(["dc-has", "dc-margin"]);
+				rv.removeClasses(["dc-margin"]);
 				const draftColor = authorColorCss(this.deps.highlightColorForAuthor(this.deps.getAuthor()));
 				rv.style.setProperty("--dc-highlight-color", draftColor);
 				rv.style.setProperty("--dc-draft-highlight-color", draftColor);

@@ -203,7 +203,9 @@ Use the trash-can button beside a person to remove their assignment. Deleted map
 
 ## Desktop and mobile behavior
 
-Desktop views show cards in a margin beside the note. The cards align with their selected text and avoid overlaps.
+Desktop views show cards in an overlay column pinned to the right edge of the pane. The cards align with their selected text and avoid overlaps.
+
+The overlay never changes your note's layout: it reserves no width and does not reflow or re-center the text, so the note keeps exactly the width, margins, and centering Obsidian gives it whether or not comments exist. On a full-width note the cards can overlap text, which is why closed cards are translucent — they turn fully opaque on hover or when opened. A small minimize grip at the pane's top-right corner (showing the open-comment count) temporarily hides the floating cards and brings them back; text and highlights are never affected, and starting a new comment reopens the column automatically.
 
 Mobile views show the highlights without a margin, so there **Toggle comments** hides the highlights. Use the sidebar to read and manage comments.
 

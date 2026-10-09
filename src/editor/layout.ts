@@ -1,8 +1,6 @@
 import { EditorState, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { commentField } from "./state";
 import { commentConfig, highlightsShown } from "./config";
-import { hasMarginAnchor } from "../format/parse";
 import { authorColorCss } from "../author-colors";
 
 // Defined ABOVE editorLayoutField: StateField.define evaluates `provide` EAGERLY
@@ -16,30 +14,17 @@ type EditorLayoutAttributes = {
 
 const editorLayoutAttributes = (state: EditorState): EditorLayoutAttributes => {
 	const cfg = state.facet(commentConfig);
-	const fv = state.field(commentField, false);
-	// `dc-has` mirrors the inline column: present only when persistent cards
-	// actually render (comments shown, sidebar not hosting them, not mobile). It is
-	// deliberately NOT tied to the transient draft composer — reserving the column
-	// for a draft toggled the sizer's width cap on when a composer opened and off
-	// when it closed, reflowing (and re-centering) the whole document on every new
-	// comment (issue #15). The composer is a floating overlay, so with no cap it just
-	// sits over the right-hand whitespace; the text only shifts once a card persists.
-	const showInline = cfg.showComments() && !cfg.sidebarOpen() && !(cfg.isMobile?.() ?? false);
-	// Only comments whose card actually renders reserve the column. A resolved
-	// comment's card is `display:none` while resolved are hidden (dc-hide-resolved),
-	// so counting it kept the column — and its reserved width — around with nothing
-	// in it once every comment was resolved (issue #30). Mirror that visibility here.
-	// The reading-view margin applies the same guard (src/reading/margin.ts).
-	const hasColumn =
-		showInline &&
-		!!fv &&
-		fv.comments.some((c) => hasMarginAnchor(c) && (cfg.showResolved() || c.status !== "resolved"));
+	// The margin column is a pure overlay these days — it never reserves layout
+	// space, so there is deliberately NO class mirroring "comments present". Only
+	// state that changes the TEXT or card visibility rides on .cm-editor:
+	// dc-highlights and dc-hide-resolved. Adding anything comment-count-dependent
+	// here would re-cap or re-render the text, which is exactly the invasive
+	// behavior we removed.
 
 	const classes: string[] = [];
-	if (hasColumn) classes.push("dc-has");
 	// Highlights have their own toggle, so they persist both while the sidebar
-	// panel hosts the cards (dc-has off) and while the column is hidden entirely,
-	// except on mobile (see highlightsShown).
+	// panel hosts the cards and while the column is hidden entirely, except on
+	// mobile (see highlightsShown).
 	if (highlightsShown(cfg)) classes.push("dc-highlights");
 	if (!cfg.showResolved()) classes.push("dc-hide-resolved");
 	const draftColor = authorColorCss((cfg.highlightColorForAuthor ?? cfg.colorForAuthor)(cfg.author()));
@@ -50,13 +35,12 @@ const editorLayoutAttributes = (state: EditorState): EditorLayoutAttributes => {
 };
 
 /**
- * Mirrors the layout/visibility state onto the `.cm-editor` element as plain
- * classes (`dc-has`, `dc-highlights`, `dc-hide-resolved`) so the stylesheet can
- * cap the text column and toggle highlights with ordinary descendant selectors —
- * no `:has()`. We route through CodeMirror's `editorAttributes` facet rather than
- * `classList` on `view.dom`, because CodeMirror owns that element's className and
- * rewrites it on reconfigure; a raw `classList.add` gets silently dropped (the
- * reason the layout used to key off a `:has()` of our own child element instead).
+ * Mirrors the visibility state onto the `.cm-editor` element as plain classes
+ * (`dc-highlights`, `dc-hide-resolved`) so the stylesheet can toggle highlights
+ * with ordinary descendant selectors — no `:has()`. We route through CodeMirror's
+ * `editorAttributes` facet rather than `classList` on `view.dom`, because
+ * CodeMirror owns that element's className and rewrites it on reconfigure; a raw
+ * `classList.add` gets silently dropped.
  *
  * The value recomputes on every transaction — including the empty `dispatch({})`
  * the plugin fires when a setting toggles — so the classes always track state.

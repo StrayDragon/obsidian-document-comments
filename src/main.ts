@@ -100,8 +100,9 @@ export default class DocCommentsPlugin extends Plugin {
 				openInSidebar: (id) => void this.revealComment(id),
 				isMobile: () => Platform.isMobile,
 			}),
-			// Reflects dc-has / dc-highlights / dc-hide-resolved onto .cm-editor so the
-			// stylesheet caps the text column without a :has() selector.
+			// Reflects dc-highlights / dc-hide-resolved onto .cm-editor so the
+			// stylesheet toggles highlights without a :has() selector. The margin
+			// overlay itself never reserves layout, so nothing here mirrors it.
 			editorLayoutField,
 			// The floating margin column needs horizontal room mobile doesn't have, so
 			// there we skip it entirely — comments live in the sidebar, highlights stay,

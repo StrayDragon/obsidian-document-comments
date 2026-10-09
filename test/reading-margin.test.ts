@@ -44,11 +44,23 @@ beforeAll(() => {
 	HTMLElement.prototype.toggleClass = function (name: string, enabled: boolean) {
 		this.classList.toggle(name, enabled);
 	};
+	HTMLElement.prototype.addClass = function (name: string) {
+		this.classList.add(name);
+	};
+	HTMLElement.prototype.removeClass = function (name: string) {
+		this.classList.remove(name);
+	};
 	HTMLElement.prototype.removeClasses = function (names: string[]) {
 		this.classList.remove(...names);
 	};
 	HTMLElement.prototype.setCssStyles = function (styles: Partial<CSSStyleDeclaration>) {
 		Object.assign(this.style, styles);
+	};
+	HTMLElement.prototype.empty = function () {
+		this.replaceChildren();
+	};
+	HTMLElement.prototype.setText = function (text: string) {
+		this.textContent = text;
 	};
 });
 
@@ -186,6 +198,68 @@ describe("reading margin windows", () => {
 
 		expect(readingView.style.getPropertyValue("--dc-draft-highlight-color")).toBe("#6e56cf");
 		expect(draft?.style.getPropertyValue("--dc-highlight-color")).toBe("");
+		manager.destroy();
+	});
+});
+
+describe("minimize grip", () => {
+	const commentedDoc = [
+		"Ship on <!--c:new1-->Friday<!--/c:new1--> regardless.",
+		'<!--co:new1 by:me at:2026-06-17T00:00:00.000Z status:open quote:"Friday"',
+		"me: hi",
+		"-->",
+		"",
+	].join("\n");
+
+	const setup = async (doc: string) => {
+		const wrapper = document.createElement("div");
+		const readingView = wrapper.createDiv("markdown-reading-view");
+		readingView.createDiv("markdown-preview-view");
+		const view = new MarkdownView();
+		Object.defineProperty(view, "containerEl", { value: wrapper });
+		Object.defineProperty(view, "file", { value: { path: "test.md" } });
+		view.getViewData = () => doc;
+		const app = { workspace: { getLeavesOfType: () => [{ view }] }, vault: { read: async () => doc } };
+		const deps = {
+			app,
+			getAuthor: () => "me",
+			colorForAuthor: () => "#0090ff",
+			highlightColorForAuthor: () => "#0090ff",
+			showComments: () => true,
+			showResolved: () => false,
+			showHighlights: () => true,
+			allowEmptyComments: () => false,
+			sidebarOpen: () => false,
+			isMobile: () => false,
+		} as unknown as ReadingDeps;
+		const manager = new ReadingMarginManager(deps);
+		manager.refresh();
+		// ReadingMargin.refresh is async (vault.read); let that chain settle.
+		await new Promise((r) => setTimeout(r, 0));
+		return { readingView, manager };
+	};
+
+	test("no comments → no grip on the overlay", async () => {
+		const { readingView, manager } = await setup("Just plain text.\nNo comments here.\n");
+		expect(readingView.querySelector(".dc-margin-tab")).toBeNull();
+		manager.destroy();
+	});
+
+	test("a commented note gets a grip with a count that toggles the overlay", async () => {
+		const { readingView, manager } = await setup(commentedDoc);
+		const tab = readingView.querySelector<HTMLElement>(".dc-margin-tab");
+		expect(tab).not.toBeNull();
+		expect(tab?.querySelector(".dc-margin-tab__count")?.textContent).toBe("1");
+
+		const container = readingView.querySelector<HTMLElement>(".doc-comment-margin");
+		expect(container?.classList.contains("dc-collapsed")).toBe(false);
+
+		tab?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		expect(container?.classList.contains("dc-collapsed")).toBe(true);
+		expect(tab?.getAttribute("aria-pressed")).toBe("true");
+
+		tab?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		expect(container?.classList.contains("dc-collapsed")).toBe(false);
 		manager.destroy();
 	});
 });
